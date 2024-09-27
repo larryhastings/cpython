@@ -1456,6 +1456,11 @@ dummy_func(
             locals = PyStackRef_FromPyObjectNew(l);
         }
 
+        inst(LOAD_GLOBALS, ( -- globals)) {
+            PyObject *g = GLOBALS();
+            globals = PyStackRef_FromPyObjectNew(g);
+        }
+
         inst(LOAD_FROM_DICT_OR_GLOBALS, (mod_or_class_dict -- v)) {
             PyObject *name = GETITEM(FRAME_CO_NAMES, oparg);
             PyObject *v_o;
@@ -4402,7 +4407,7 @@ dummy_func(
                     func_obj->func_defaults = attr;
                     break;
                 case MAKE_FUNCTION_ANNOTATE:
-                    assert(PyCallable_Check(attr));
+                    assert(PyFunction_IsAnnotate(attr));
                     assert(func_obj->func_annotate == NULL);
                     func_obj->func_annotate = attr;
                     break;

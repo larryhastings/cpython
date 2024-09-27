@@ -817,6 +817,15 @@
             break;
         }
 
+        case _LOAD_GLOBALS: {
+            _Py_UopsSymbol *globals;
+            globals = sym_new_not_null(ctx);
+            stack_pointer[0] = globals;
+            stack_pointer += 1;
+            assert(WITHIN_STACK_BOUNDS());
+            break;
+        }
+
         /* _LOAD_FROM_DICT_OR_GLOBALS is not a viable micro-op for tier 2 */
 
         case _LOAD_NAME: {

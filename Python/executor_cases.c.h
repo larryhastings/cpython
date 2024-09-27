@@ -1644,6 +1644,16 @@
             break;
         }
 
+        case _LOAD_GLOBALS: {
+            _PyStackRef globals;
+            PyObject *g = GLOBALS();
+            globals = PyStackRef_FromPyObjectNew(g);
+            stack_pointer[0] = globals;
+            stack_pointer += 1;
+            assert(WITHIN_STACK_BOUNDS());
+            break;
+        }
+
         /* _LOAD_FROM_DICT_OR_GLOBALS is not a viable micro-op for tier 2 because it has both popping and not-popping errors */
 
         case _LOAD_NAME: {
@@ -4972,7 +4982,7 @@
                 func_obj->func_defaults = attr;
                 break;
                 case MAKE_FUNCTION_ANNOTATE:
-                assert(PyCallable_Check(attr));
+                assert(PyFunction_IsAnnotate(attr));
                 assert(func_obj->func_annotate == NULL);
                 func_obj->func_annotate = attr;
                 break;

@@ -1854,6 +1854,7 @@ type_get_annotate(PyTypeObject *type, void *Py_UNUSED(ignored))
         if (get) {
             Py_SETREF(annotate, get(annotate, NULL, (PyObject *)type));
         }
+        annotate = PyFunction_BindAnnotate(annotate, NULL);
     }
     else {
         annotate = Py_None;
@@ -1881,7 +1882,8 @@ type_set_annotate(PyTypeObject *type, PyObject *value, void *Py_UNUSED(ignored))
         return -1;
     }
 
-    if (!Py_IsNone(value) && !PyCallable_Check(value)) {
+//    if (!Py_IsNone(value) && !PyCallable_Check(value)) {
+    if (!Py_IsNone(value) && !PyFunction_IsAnnotate(value)) { // DO NOT CHECK IN
         PyErr_SetString(PyExc_TypeError, "__annotate__ must be callable or None");
         return -1;
     }

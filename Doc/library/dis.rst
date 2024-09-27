@@ -1100,6 +1100,15 @@ iterations of the loop.
    .. versionadded:: 3.12
 
 
+.. opcode:: LOAD_GLOBALS
+
+   Pushes a reference to the globals dictionary onto the stack.  This is
+   only used to store a reference to the proper globals dictionary for
+   a lazily-bound ``__annotate__`` method on a class object.
+
+   .. versionadded:: 3.14
+
+
 .. opcode:: LOAD_FROM_DICT_OR_GLOBALS (i)
 
    Pops a mapping off the stack and looks up the value for ``co_names[namei]``.

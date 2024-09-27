@@ -670,7 +670,8 @@ codegen_setup_annotations_scope(compiler *c, location loc,
 
 static int
 codegen_leave_annotations_scope(compiler *c, location loc,
-                                Py_ssize_t annotations_len)
+                                Py_ssize_t annotations_len,
+                                int flags)
 {
     ADDOP_I(c, loc, BUILD_MAP, annotations_len);
     ADDOP_IN_SCOPE(c, loc, RETURN_VALUE);
@@ -679,14 +680,14 @@ codegen_leave_annotations_scope(compiler *c, location loc,
     if (co == NULL) {
         return ERROR;
     }
-    int ret = codegen_make_closure(c, loc, co, 0);
+    int ret = codegen_make_closure(c, loc, co, MAKE_FUNCTION_LAZILY_BOUND | flags);
     Py_DECREF(co);
     RETURN_IF_ERROR(ret);
     return SUCCESS;
 }
 
 static int
-codegen_process_deferred_annotations(compiler *c, location loc)
+codegen_process_deferred_annotations(compiler *c, location loc, int flags)
 {
     PyObject *deferred_anno = _PyCompile_DeferredAnnotations(c);
     if (deferred_anno == NULL) {
@@ -727,7 +728,7 @@ codegen_process_deferred_annotations(compiler *c, location loc)
     }
     Py_DECREF(deferred_anno);
 
-    RETURN_IF_ERROR(codegen_leave_annotations_scope(c, loc, annotations_len));
+    RETURN_IF_ERROR(codegen_leave_annotations_scope(c, loc, annotations_len, flags));
     RETURN_IF_ERROR(codegen_nameop(c, loc, &_Py_ID(__annotate__), Store));
 
     return SUCCESS;
@@ -745,7 +746,7 @@ _PyCodegen_Expression(compiler *c, expr_ty e)
    and for annotations. */
 
 int
-_PyCodegen_Body(compiler *c, location loc, asdl_stmt_seq *stmts, bool is_interactive)
+_PyCodegen_Body(compiler *c, location loc, asdl_stmt_seq *stmts, int flags)
 {
     /* If from __future__ import annotations is active,
      * every annotated class and module should have __annotations__.
@@ -757,7 +758,7 @@ _PyCodegen_Body(compiler *c, location loc, asdl_stmt_seq *stmts, bool is_interac
         return SUCCESS;
     }
     Py_ssize_t first_instr = 0;
-    if (!is_interactive) { /* A string literal on REPL prompt is not a docstring */
+    if (!(flags & MAKE_FUNCTION_INTERACTIVE)) { /* A string literal on REPL prompt is not a docstring */
         PyObject *docstring = _PyAST_GetDocString(stmts);
         if (docstring) {
             first_instr = 1;
@@ -782,7 +783,7 @@ _PyCodegen_Body(compiler *c, location loc, asdl_stmt_seq *stmts, bool is_interac
     // collect the annotations in a separate pass and generate an
     // __annotate__ function. See PEP 649.
     if (!(FUTURE_FEATURES(c) & CO_FUTURE_ANNOTATIONS)) {
-        RETURN_IF_ERROR(codegen_process_deferred_annotations(c, loc));
+        RETURN_IF_ERROR(codegen_process_deferred_annotations(c, loc, flags & MAKE_FUNCTION_LAZY_GLOBALS));
     }
     return SUCCESS;
 }
@@ -817,8 +818,29 @@ codegen_make_closure(compiler *c, location loc,
     }
     ADDOP_LOAD_CONST(c, loc, (PyObject*)co);
 
-    ADDOP(c, loc, MAKE_FUNCTION);
+    if (flags & MAKE_FUNCTION_LAZILY_BOUND) {
+        // don't generate MAKE_FUNCTION, instead store either the code object or a tuple of junk
 
+        // LAZILY_BOUND only supports two other flags, CLOSURE and LAZY_GLOBALS
+        if (flags & (~(MAKE_FUNCTION_LAZILY_BOUND | MAKE_FUNCTION_LAZY_GLOBALS | MAKE_FUNCTION_CLOSURE))) {
+            return ERROR;
+        }
+
+        Py_ssize_t count = 1;
+        if (flags & MAKE_FUNCTION_LAZY_GLOBALS) {
+            count += 1;
+            ADDOP(c, loc, LOAD_GLOBALS);
+        }
+        if (flags & MAKE_FUNCTION_CLOSURE) {
+            count += 1;
+        }
+        if (count > 1) {
+            ADDOP_I(c, loc, BUILD_TUPLE, count);
+        }
+        return SUCCESS;
+    }
+
+    ADDOP(c, loc, MAKE_FUNCTION);
     if (flags & MAKE_FUNCTION_CLOSURE) {
         ADDOP_I(c, loc, SET_FUNCTION_ATTRIBUTE, MAKE_FUNCTION_CLOSURE);
     }
@@ -1010,7 +1032,7 @@ codegen_annotations(compiler *c, location loc,
             c, codegen_annotations_in_scope(c, loc, args, returns, &annotations_len)
         );
         RETURN_IF_ERROR(
-            codegen_leave_annotations_scope(c, loc, annotations_len)
+            codegen_leave_annotations_scope(c, loc, annotations_len, 0)
         );
         return MAKE_FUNCTION_ANNOTATE;
     }
@@ -1431,7 +1453,7 @@ codegen_class_body(compiler *c, stmt_ty s, int firstlineno)
         ADDOP_N_IN_SCOPE(c, loc, STORE_DEREF, &_Py_ID(__classdict__), cellvars);
     }
     /* compile the body proper */
-    RETURN_IF_ERROR_IN_SCOPE(c, _PyCodegen_Body(c, loc, s->v.ClassDef.body, false));
+    RETURN_IF_ERROR_IN_SCOPE(c, _PyCodegen_Body(c, loc, s->v.ClassDef.body, MAKE_FUNCTION_LAZY_GLOBALS));
     PyObject *static_attributes = _PyCompile_StaticAttributesAsTuple(c);
     if (static_attributes == NULL) {
         _PyCompile_ExitScope(c);

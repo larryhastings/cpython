@@ -1156,14 +1156,26 @@ module_get_annotate(PyModuleObject *m, void *Py_UNUSED(ignored))
         return NULL;
     }
 
+    int spill = 0;
     PyObject *annotate;
+
     if (PyDict_GetItemRef(dict, &_Py_ID(__annotate__), &annotate) == 0) {
         annotate = Py_None;
-        if (PyDict_SetItem(dict, &_Py_ID(__annotate__), annotate) == -1) {
-            Py_CLEAR(annotate);
+        spill = 1;
+    } else {
+        PyObject *fn = PyFunction_BindAnnotate(annotate, m->md_dict);
+        if ((fn != NULL) && (fn != annotate)) {
+            spill = 1;
+            annotate = fn;
         }
     }
+
+    if (spill && (PyDict_SetItem(dict, &_Py_ID(__annotate__), annotate) == -1)) {
+        Py_CLEAR(annotate);
+    }
+
     Py_DECREF(dict);
+    Py_DECREF(annotate);
     return annotate;
 }
 
@@ -1179,7 +1191,7 @@ module_set_annotate(PyModuleObject *m, PyObject *value, void *Py_UNUSED(ignored)
         return -1;
     }
 
-    if (!Py_IsNone(value) && !PyCallable_Check(value)) {
+    if (!Py_IsNone(value) && !PyFunction_IsAnnotate(value)) {
         PyErr_SetString(PyExc_TypeError, "__annotate__ must be callable or None");
         Py_DECREF(dict);
         return -1;
@@ -1215,7 +1227,12 @@ module_get_annotations(PyModuleObject *m, void *Py_UNUSED(ignored))
             Py_DECREF(dict);
             return NULL;
         }
-        if (annotate_result == 1 && PyCallable_Check(annotate)) {
+        if (annotate_result == 1 && PyFunction_IsAnnotate(annotate)) {
+            PyObject *fn = PyFunction_BindAnnotate(annotate, m->md_dict);
+            if ((fn != NULL) && (fn != annotate)) {
+                PyDict_SetItem(dict, &_Py_ID(__annotate__), annotate);
+                annotate = fn;
+            }
             PyObject *one = _PyLong_GetOne();
             annotations = _PyObject_CallOneArg(annotate, one);
             if (annotations == NULL) {

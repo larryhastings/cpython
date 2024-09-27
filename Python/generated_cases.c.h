@@ -5702,6 +5702,19 @@
             DISPATCH();
         }
 
+        TARGET(LOAD_GLOBALS) {
+            frame->instr_ptr = next_instr;
+            next_instr += 1;
+            INSTRUCTION_STATS(LOAD_GLOBALS);
+            _PyStackRef globals;
+            PyObject *g = GLOBALS();
+            globals = PyStackRef_FromPyObjectNew(g);
+            stack_pointer[0] = globals;
+            stack_pointer += 1;
+            assert(WITHIN_STACK_BOUNDS());
+            DISPATCH();
+        }
+
         TARGET(LOAD_GLOBAL_BUILTIN) {
             _Py_CODEUNIT *this_instr = frame->instr_ptr = next_instr;
             next_instr += 5;
@@ -6759,7 +6772,7 @@
                 func_obj->func_defaults = attr;
                 break;
                 case MAKE_FUNCTION_ANNOTATE:
-                assert(PyCallable_Check(attr));
+                assert(PyFunction_IsAnnotate(attr));
                 assert(func_obj->func_annotate == NULL);
                 func_obj->func_annotate = attr;
                 break;

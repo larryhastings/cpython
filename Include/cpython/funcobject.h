@@ -81,6 +81,8 @@ PyAPI_FUNC(PyObject *) PyFunction_GetClosure(PyObject *);
 PyAPI_FUNC(int) PyFunction_SetClosure(PyObject *, PyObject *);
 PyAPI_FUNC(PyObject *) PyFunction_GetAnnotations(PyObject *);
 PyAPI_FUNC(int) PyFunction_SetAnnotations(PyObject *, PyObject *);
+PyAPI_FUNC(PyObject *) PyFunction_BindAnnotate(PyObject *o, PyObject *globals);
+PyAPI_FUNC(int) PyFunction_IsAnnotate(PyObject *fn);
 
 #define _PyFunction_CAST(func) \
     (assert(PyFunction_Check(func)), _Py_CAST(PyFunctionObject*, func))
@@ -121,6 +123,8 @@ static inline PyObject* PyFunction_GET_ANNOTATIONS(PyObject *func) {
     return _PyFunction_CAST(func)->func_annotations;
 }
 #define PyFunction_GET_ANNOTATIONS(func) PyFunction_GET_ANNOTATIONS(_PyObject_CAST(func))
+
+
 
 /* The classmethod and staticmethod types lives here, too */
 PyAPI_DATA(PyTypeObject) PyClassMethod_Type;

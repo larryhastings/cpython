@@ -511,12 +511,103 @@ PyFunction_SetClosure(PyObject *op, PyObject *closure)
     return 0;
 }
 
+int
+PyFunction_IsAnnotate(PyObject *o) {
+    return (o != NULL) && (
+        PyFunction_Check(o)
+        ||
+        PyCode_Check(o)
+        ||
+        (PyTuple_Check(o) && ((PyTuple_GET_SIZE(o) == 2) || (PyTuple_GET_SIZE(o) == 3)))
+        );
+}
+
+/*
+** Binds an __annotate__ function for you.
+**
+** You pass in your current __annotate__ value as o,
+** and you get back a lovely bound function object.
+**
+** Supported values for o:
+**    * an already-bound function object
+**    * a code object
+**    * a tuple containing a closure, a code object, and optionally
+**      a reference to globals, in that exact order
+** (These are things you might now find in __annotate__.  The first
+** one is conventional enough; the latter two are now things the
+** CPython compiler might emit.)
+**
+** If o isn't one of these values, returns NULL and doesn't
+** change the reference count of o.
+**
+** If o is already a bound function object, returns it unmodified,
+** and changes no reference counts.   Otherwise, it *drops your
+** reference to o for you* and returns a new reference to the object
+** you should use instead.  Either way you own the reference to the
+** returned object.
+**
+** If you have a reference to your globals (because you're a function
+** or a module) please pass it in as globals.  If you don't (because
+** you're a class) please pass in NULL for globals.  It's an error if
+** you pass in a non-NULL value for globals and o is a tuple that also
+** contains globals.
+*/
+PyObject *
+PyFunction_BindAnnotate(PyObject *o, PyObject *globals) {
+    if (!PyFunction_IsAnnotate(o)) {
+        return NULL;
+    }
+
+    if (PyFunction_Check(o)) {
+        return o;
+    }
+
+    PyObject *code_object;
+    PyObject *closure;
+
+    if (PyCode_Check(o)) {
+        code_object = o;
+        closure = NULL;
+    } else {
+        assert(PyTuple_Check(o));
+        closure = PyTuple_GET_ITEM(o, 0);
+        assert(PyTuple_Check(closure) || (closure == Py_None));
+        if (closure == Py_None) {
+            closure = NULL;
+        }
+        code_object = PyTuple_GET_ITEM(o, 1);
+        assert(PyCode_Check(code_object));
+        if (PyTuple_GET_SIZE(o) > 2) {
+            assert(PyTuple_GET_SIZE(o) == 3);
+            assert(globals == NULL);
+            globals = PyTuple_GET_ITEM(o, 2);
+        }
+    }
+
+    PyObject *f = PyFunction_New(code_object, globals);
+    if (closure != NULL) {
+        PyFunction_SetClosure(f, closure);
+    }
+
+    /* you're welcome! */
+    Py_DECREF(o);
+
+    return f;
+}
+
 static PyObject *
 func_get_annotation_dict(PyFunctionObject *op)
 {
     if (op->func_annotations == NULL) {
-        if (op->func_annotate == NULL || !PyCallable_Check(op->func_annotate)) {
+        if (!PyFunction_IsAnnotate(op->func_annotate)) {
             Py_RETURN_NONE;
+        }
+        PyObject *fn = PyFunction_BindAnnotate(op->func_annotate, op->func_globals);
+        if (fn == NULL) {
+            return NULL;
+        }
+        if (op->func_annotate != fn) {
+            op->func_annotate = fn;
         }
         PyObject *one = _PyLong_GetOne();
         PyObject *ann_dict = _PyObject_CallOneArg(op->func_annotate, one);
@@ -787,10 +878,17 @@ func_set_kwdefaults(PyFunctionObject *op, PyObject *value, void *Py_UNUSED(ignor
 static PyObject *
 func_get_annotate(PyFunctionObject *op, void *Py_UNUSED(ignored))
 {
-    if (op->func_annotate == NULL) {
+    if (!PyFunction_IsAnnotate(op->func_annotate)) {
         Py_RETURN_NONE;
     }
-    return Py_NewRef(op->func_annotate);
+
+    PyObject *fn = PyFunction_BindAnnotate(op->func_annotate, op->func_globals);
+    if ((fn != NULL) && (fn != op->func_annotate)) {
+        op->func_annotate = fn;
+    }
+
+    Py_INCREF(op->func_annotate);
+    return op->func_annotate;
 }
 
 static int
@@ -817,15 +915,16 @@ func_set_annotate(PyFunctionObject *op, PyObject *value, void *Py_UNUSED(ignored
     }
 }
 
+
 static PyObject *
 func_get_annotations(PyFunctionObject *op, void *Py_UNUSED(ignored))
 {
-    if (op->func_annotations == NULL &&
-        (op->func_annotate == NULL || !PyCallable_Check(op->func_annotate))) {
+    if ((op->func_annotations == NULL) && !PyFunction_IsAnnotate(op->func_annotate)) {
         op->func_annotations = PyDict_New();
         if (op->func_annotations == NULL)
             return NULL;
     }
+
     PyObject *d = func_get_annotation_dict(op);
     return Py_XNewRef(d);
 }
