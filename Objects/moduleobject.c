@@ -95,6 +95,7 @@ new_module_notrack(PyTypeObject *mt)
         Py_DECREF(m);
         return NULL;
     }
+    m->md_annotate = NULL;
     return m;
 }
 
@@ -1151,32 +1152,27 @@ module_get_dict(PyModuleObject *m)
 static PyObject *
 module_get_annotate(PyModuleObject *m, void *Py_UNUSED(ignored))
 {
-    PyObject *dict = module_get_dict(m);
-    if (dict == NULL) {
-        return NULL;
+    if (m->md_annotate == NULL) {
+        Py_RETURN_NONE;
     }
 
-    int spill = 0;
-    PyObject *annotate;
-
-    if (PyDict_GetItemRef(dict, &_Py_ID(__annotate__), &annotate) == 0) {
-        annotate = Py_None;
-        spill = 1;
-    } else {
-        PyObject *fn = PyFunction_BindAnnotate(annotate, m->md_dict);
-        if ((fn != NULL) && (fn != annotate)) {
-            spill = 1;
-            annotate = fn;
+    if (!PyCallable_Check(m->md_annotate)) {
+        PyObject *globals = module_get_dict(m);
+        if (globals == NULL) {
+            return NULL;
         }
+
+        PyObject *fn = PyFunction_BindAnnotate(m->md_annotate, globals);
+        Py_DECREF(globals);
+
+        if (fn == NULL) {
+            return NULL;
+        }
+        m->md_annotate = fn;
     }
 
-    if (spill && (PyDict_SetItem(dict, &_Py_ID(__annotate__), annotate) == -1)) {
-        Py_CLEAR(annotate);
-    }
-
-    Py_DECREF(dict);
-    Py_DECREF(annotate);
-    return annotate;
+    Py_INCREF(m->md_annotate);
+    return m->md_annotate;
 }
 
 static int
@@ -1186,28 +1182,26 @@ module_set_annotate(PyModuleObject *m, PyObject *value, void *Py_UNUSED(ignored)
         PyErr_SetString(PyExc_TypeError, "cannot delete __annotate__ attribute");
         return -1;
     }
-    PyObject *dict = module_get_dict(m);
-    if (dict == NULL) {
-        return -1;
-    }
 
-    if (!Py_IsNone(value) && !PyFunction_IsAnnotate(value)) {
+    if (!Py_IsNone(value) && !PyCallable_Check(value)) {
         PyErr_SetString(PyExc_TypeError, "__annotate__ must be callable or None");
-        Py_DECREF(dict);
         return -1;
     }
 
-    if (PyDict_SetItem(dict, &_Py_ID(__annotate__), value) == -1) {
-        Py_DECREF(dict);
-        return -1;
-    }
     if (!Py_IsNone(value)) {
-        if (PyDict_Pop(dict, &_Py_ID(__annotations__), NULL) == -1) {
-            Py_DECREF(dict);
+        PyObject *dict = module_get_dict(m);
+        if (dict == NULL) {
+            return -1;
+        }
+        int result = PyDict_Pop(dict, &_Py_ID(__annotations__), NULL);
+        Py_DECREF(dict);
+        if (result == -1) {
             return -1;
         }
     }
-    Py_DECREF(dict);
+
+    Py_XSETREF(m->md_annotate, value);
+
     return 0;
 }
 
@@ -1221,29 +1215,18 @@ module_get_annotations(PyModuleObject *m, void *Py_UNUSED(ignored))
 
     PyObject *annotations;
     if (PyDict_GetItemRef(dict, &_Py_ID(__annotations__), &annotations) == 0) {
-        PyObject *annotate;
-        int annotate_result = PyDict_GetItemRef(dict, &_Py_ID(__annotate__), &annotate);
-        if (annotate_result < 0) {
-            Py_DECREF(dict);
-            return NULL;
-        }
-        if (annotate_result == 1 && PyFunction_IsAnnotate(annotate)) {
-            PyObject *fn = PyFunction_BindAnnotate(annotate, m->md_dict);
-            if ((fn != NULL) && (fn != annotate)) {
-                PyDict_SetItem(dict, &_Py_ID(__annotate__), annotate);
-                annotate = fn;
-            }
+        PyObject *annotate = module_get_annotate(m, NULL);
+        if (annotate != Py_None) {
             PyObject *one = _PyLong_GetOne();
             annotations = _PyObject_CallOneArg(annotate, one);
+            Py_DECREF(annotate);
             if (annotations == NULL) {
-                Py_DECREF(annotate);
                 Py_DECREF(dict);
                 return NULL;
             }
             if (!PyDict_Check(annotations)) {
                 PyErr_Format(PyExc_TypeError, "__annotate__ returned non-dict of type '%.100s'",
                              Py_TYPE(annotations)->tp_name);
-                Py_DECREF(annotate);
                 Py_DECREF(annotations);
                 Py_DECREF(dict);
                 return NULL;
@@ -1289,8 +1272,8 @@ module_set_annotations(PyModuleObject *m, PyObject *value, void *Py_UNUSED(ignor
             ret = 0;
         }
     }
-    if (ret == 0 && PyDict_Pop(dict, &_Py_ID(__annotate__), NULL) < 0) {
-        ret = -1;
+    if (ret == 0) {
+        Py_CLEAR(m->md_annotate);
     }
 
     Py_DECREF(dict);

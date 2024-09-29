@@ -25,6 +25,7 @@ typedef struct {
 #ifdef Py_GIL_DISABLED
     void *md_gil;
 #endif
+    PyObject *md_annotate;
 } PyModuleObject;
 
 static inline PyModuleDef* _PyModule_GetDef(PyObject *mod) {

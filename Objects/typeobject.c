@@ -1843,34 +1843,35 @@ type_get_annotate(PyTypeObject *type, void *Py_UNUSED(ignored))
         return NULL;
     }
 
-    PyObject *annotate;
-    PyObject *dict = PyType_GetDict(type);
-    if (PyDict_GetItemRef(dict, &_Py_ID(__annotate__), &annotate) < 0) {
-        Py_DECREF(dict);
-        return NULL;
-    }
-    if (annotate) {
+    PyHeapTypeObject *ht = (PyHeapTypeObject *)type;
+    PyObject *annotate = ht->ht_annotate;
+    if (annotate == NULL) {
+        ht->ht_annotate = annotate = Py_None;
+    } else {
         descrgetfunc get = Py_TYPE(annotate)->tp_descr_get;
         if (get) {
             Py_SETREF(annotate, get(annotate, NULL, (PyObject *)type));
         }
-        annotate = PyFunction_BindAnnotate(annotate, NULL);
-    }
-    else {
-        annotate = Py_None;
-        int result = PyDict_SetItem(dict, &_Py_ID(__annotate__), annotate);
-        if (result < 0) {
+        if (!PyCallable_Check(annotate)) {
+            PyObject *dict = PyType_GetDict(type);
+            annotate = PyFunction_BindAnnotate(annotate, dict);
+            if (annotate != NULL) {
+                ht->ht_annotate = annotate;
+            }
             Py_DECREF(dict);
-            return NULL;
         }
     }
-    Py_DECREF(dict);
     return annotate;
 }
 
 static int
 type_set_annotate(PyTypeObject *type, PyObject *value, void *Py_UNUSED(ignored))
 {
+    if (!(type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        PyErr_Format(PyExc_AttributeError, "type object '%s' has no attribute '__annotate__'", type->tp_name);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete __annotate__ attribute");
         return -1;
@@ -1882,28 +1883,23 @@ type_set_annotate(PyTypeObject *type, PyObject *value, void *Py_UNUSED(ignored))
         return -1;
     }
 
-//    if (!Py_IsNone(value) && !PyCallable_Check(value)) {
-    if (!Py_IsNone(value) && !PyFunction_IsAnnotate(value)) { // DO NOT CHECK IN
+    if (!Py_IsNone(value) && !PyCallable_Check(value)) {
         PyErr_SetString(PyExc_TypeError, "__annotate__ must be callable or None");
         return -1;
     }
 
-    PyObject *dict = PyType_GetDict(type);
-    assert(PyDict_Check(dict));
-    int result = PyDict_SetItem(dict, &_Py_ID(__annotate__), value);
-    if (result < 0) {
-        Py_DECREF(dict);
-        return -1;
-    }
+    PyHeapTypeObject *ht = (PyHeapTypeObject *)type;
+    Py_SETREF(ht->ht_annotate, value);
+    PyType_Modified(type);
     if (!Py_IsNone(value)) {
-        if (PyDict_Pop(dict, &_Py_ID(__annotations__), NULL) == -1) {
-            Py_DECREF(dict);
-            PyType_Modified(type);
+        PyObject *dict = PyType_GetDict(type);
+        assert(PyDict_Check(dict));
+        int result = PyDict_Pop(dict, &_Py_ID(__annotations__), NULL);
+        Py_DECREF(dict);
+        if (result == -1) {
             return -1;
         }
     }
-    Py_DECREF(dict);
-    PyType_Modified(type);
     return 0;
 }
 
@@ -1971,6 +1967,11 @@ type_get_annotations(PyTypeObject *type, void *context)
 static int
 type_set_annotations(PyTypeObject *type, PyObject *value, void *context)
 {
+    if (!(type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        PyErr_Format(PyExc_AttributeError, "type object '%s' has no attribute '__annotate__'", type->tp_name);
+        return -1;
+    }
+
     if (_PyType_HasFeature(type, Py_TPFLAGS_IMMUTABLETYPE)) {
         PyErr_Format(PyExc_TypeError,
                      "cannot set '__annotations__' attribute of immutable type '%s'",
@@ -1997,10 +1998,9 @@ type_set_annotations(PyTypeObject *type, PyObject *value, void *context)
         return -1;
     }
     else if (result == 0) {
-        if (PyDict_Pop(dict, &_Py_ID(__annotate__), NULL) < 0) {
-            PyType_Modified(type);
-            Py_DECREF(dict);
-            return -1;
+        PyHeapTypeObject *ht = (PyHeapTypeObject *)type;
+        if ((ht->ht_annotate != NULL) && (ht->ht_annotate != Py_None)) {
+            Py_CLEAR(ht->ht_annotate);
         }
     }
     PyType_Modified(type);
@@ -3928,7 +3928,7 @@ type_new_alloc(type_new_ctx *ctx)
     et->ht_name = Py_NewRef(ctx->name);
     et->ht_module = NULL;
     et->_ht_tpname = NULL;
-    et->ht_token = NULL;
+    et->ht_annotate = NULL;
 
 #ifdef Py_GIL_DISABLED
     _PyType_AssignId(et);
@@ -4954,6 +4954,7 @@ PyType_FromMetaclass(
     type->tp_name = _ht_tpname;
     res->_ht_tpname = _ht_tpname;
     _ht_tpname = NULL;  // Give ownership to the type
+    res->ht_annotate = NULL;
 
     /* Copy the sizes */
 
@@ -6105,6 +6106,7 @@ type_dealloc(PyObject *self)
     _PyType_ReleaseId(et);
 #endif
     et->ht_token = NULL;
+    Py_XDECREF(et->ht_annotate);
     Py_TYPE(type)->tp_free((PyObject *)type);
 }
 
